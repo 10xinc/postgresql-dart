@@ -4,7 +4,7 @@ import 'package:pool/pool.dart';
 import 'package:stack_trace/stack_trace.dart';
 
 extension PackagePoolExt on Pool {
-  Future<PoolResource> requestWithTimeout(Duration timeout) async {
+  Future<PoolResource> requestWithTimeout(Duration timeout, {String? context}) async {
     final stack = StackTrace.current;
     final completer = Completer<PoolResource>();
 
@@ -12,8 +12,11 @@ extension PackagePoolExt on Pool {
     if (timeout > Duration.zero) {
       timer = Timer(timeout, () {
         if (!completer.isCompleted) {
+          final errorMessage = context != null
+              ? 'Failed to acquire pool lock. Context: $context'
+              : 'Failed to acquire pool lock.';
           completer.completeError(
-              TimeoutException('Failed to acquire pool lock.'), stack);
+              TimeoutException(errorMessage), stack);
         }
       });
     }
@@ -46,9 +49,10 @@ extension PackagePoolExt on Pool {
   Future<T> withRequestTimeout<T>(
     FutureOr<T> Function(Duration remainingTimeout) callback, {
     required Duration timeout,
+    String? context,
   }) async {
     final sw = Stopwatch()..start();
-    final resource = await requestWithTimeout(timeout);
+    final resource = await requestWithTimeout(timeout, context: context);
     final remainingTimeout = timeout - sw.elapsed;
     try {
       return await callback(remainingTimeout);

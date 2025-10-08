@@ -24,6 +24,8 @@ import 'resolved_settings.dart';
 
 const _debugLog = false;
 
+String _timestamp() => DateTime.now().toIso8601String();
+
 String _identifier(String source) {
   // To avoid complex ambiguity rules, we always wrap identifier in double
   // quotes. That means the only character we need to escape are double quotes
@@ -214,7 +216,7 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
     final connectionId = ++_connectionIdCounter;
     final connectStart = DateTime.now();
 
-    print('[Conn:$connectionId] Connecting to ${endpoint.host}:${endpoint.port}');
+    print('${_timestamp()} [Conn:$connectionId] Connecting to ${endpoint.host}:${endpoint.port}');
 
     final settings = connectionSettings is ResolvedConnectionSettings
         ? connectionSettings
@@ -235,7 +237,7 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
       incomingBytesTransformer: incomingBytesTransformer,
     );
     final socketDuration = DateTime.now().difference(socketStart);
-    print('[Conn:$connectionId] Socket connected in ${socketDuration.inMilliseconds}ms (SSL: $secure)');
+    print('${_timestamp()} [Conn:$connectionId] Socket connected in ${socketDuration.inMilliseconds}ms (SSL: $secure)');
 
     channel = _debugChannel(channel);
 
@@ -256,14 +258,14 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
     final startupStart = DateTime.now();
     await connection._startup();
     final startupDuration = DateTime.now().difference(startupStart);
-    print('[Conn:$connectionId] Authentication completed in ${startupDuration.inMilliseconds}ms');
+    print('${_timestamp()} [Conn:$connectionId] Authentication completed in ${startupDuration.inMilliseconds}ms');
 
     if (connection._settings.onOpen != null) {
       await connection._settings.onOpen!(connection);
     }
 
     final totalDuration = DateTime.now().difference(connectStart);
-    print('[Conn:$connectionId] Connection established in ${totalDuration.inMilliseconds}ms');
+    print('${_timestamp()} [Conn:$connectionId] Connection established in ${totalDuration.inMilliseconds}ms');
 
     return connection;
   }
@@ -535,14 +537,14 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
     Future<R> Function(Session session) fn, {
     SessionSettings? settings,
   }) {
-    print('[Conn:$_connectionId] Starting session');
+    print('${_timestamp()} [Conn:$_connectionId] Starting session');
     final session =
         _RegularSession(this, ResolvedSessionSettings(settings, _settings));
     // Unlike runTx, this doesn't need any locks. An active transaction changes
     // the state of the connection, this method does not. If methods requiring
     // locks are called by [fn], these methods will aquire locks as needed.
     return Future<R>(() => fn(session)).whenComplete(() {
-      print('[Conn:$_connectionId] Session completed');
+      print('${_timestamp()} [Conn:$_connectionId] Session completed');
       session._closeSession();
     });
   }
@@ -552,7 +554,7 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
     Future<R> Function(TxSession session) fn, {
     TransactionSettings? settings,
   }) {
-    print('[Conn:$_connectionId] Starting transaction');
+    print('${_timestamp()} [Conn:$_connectionId] Starting transaction');
     final rsettings = ResolvedTransactionSettings(settings, _settings);
     // Keep this database is locked while the transaction is active. We do that
     // because on a protocol level, the entire connection is in a transaction.
@@ -584,10 +586,10 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
       try {
         final result = await fn(transaction);
         if (transaction.mayCommit) {
-          print('[Conn:$_connectionId] Committing transaction');
+          print('${_timestamp()} [Conn:$_connectionId] Committing transaction');
           await transaction._sendAndMarkClosed('COMMIT;');
         } else if (!transaction._sessionClosed) {
-          print('[Conn:$_connectionId] Rolling back transaction');
+          print('${_timestamp()} [Conn:$_connectionId] Rolling back transaction');
           await transaction._sendAndMarkClosed('ROLLBACK;');
         }
 
@@ -601,7 +603,7 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
       } catch (e) {
         if (!transaction._sessionClosed) {
           try {
-            print('[Conn:$_connectionId] Rolling back transaction due to error');
+            print('${_timestamp()} [Conn:$_connectionId] Rolling back transaction due to error');
             await transaction._sendAndMarkClosed('ROLLBACK;');
           } catch (_) {
             // checking the outer exception
@@ -621,7 +623,7 @@ class PgConnectionImplementation extends _PgSessionBase implements Connection {
 
   @override
   Future<void> close({bool force = false}) async {
-    print('[Conn:$_connectionId] Closing connection (force: $force)');
+    print('${_timestamp()} [Conn:$_connectionId] Closing connection (force: $force)');
     final ex = force ? PgException('Connection closed.') : null;
     await _close(force, ex);
   }

@@ -8,6 +8,8 @@ import '../../postgres.dart';
 import '../v3/connection.dart';
 import '../v3/resolved_settings.dart';
 
+String _timestamp() => DateTime.now().toIso8601String();
+
 EndpointSelector roundRobinSelector(List<Endpoint> endpoints) {
   int nextIndex = 0;
   return (EndpointSelectorContext context) {
@@ -134,15 +136,17 @@ class PoolImplementation<L> implements Pool<L> {
     final acquireStart = DateTime.now();
     final semaphoreWaitSw = Stopwatch()..start();
 
-    print('[Pool:$requestId] Requesting connection from pool. '
+    print('${_timestamp()} [Pool:$requestId] Requesting connection from pool. '
         'Current pool: ${_connections.length}/$_maxConnectionCount connections, '
         '${_connections.where((c) => c._isInUse).length} in use');
 
-    final resource =
-        await _semaphore.requestWithTimeout(_settings.connectTimeout);
+    final resource = await _semaphore.requestWithTimeout(
+      _settings.connectTimeout,
+      context: 'Pool:$requestId',
+    );
     semaphoreWaitSw.stop();
 
-    print('[Pool:$requestId] Semaphore acquired in ${semaphoreWaitSw.elapsedMilliseconds}ms');
+    print('${_timestamp()} [Pool:$requestId] Semaphore acquired in ${semaphoreWaitSw.elapsedMilliseconds}ms');
 
     _PoolConnection? connection;
     bool reuse = true;
@@ -160,7 +164,7 @@ class PoolImplementation<L> implements Pool<L> {
         ResolvedConnectionSettings(settings, this._settings),
       );
 
-      print('[Pool:$requestId] Using [Conn:${connection._connection.connectionId}]');
+      print('${_timestamp()} [Pool:$requestId] Using [Conn:${connection._connection.connectionId}]');
 
       sw.start();
       try {
@@ -178,7 +182,7 @@ class PoolImplementation<L> implements Pool<L> {
       if (connection != null) {
         connection._elapsedInUse += sw.elapsed;
         final totalAcquireTime = DateTime.now().difference(acquireStart);
-        print('[Pool:$requestId] [Conn:${connection._connection.connectionId}] used for ${sw.elapsedMilliseconds}ms, '
+        print('${_timestamp()} [Pool:$requestId] [Conn:${connection._connection.connectionId}] used for ${sw.elapsedMilliseconds}ms, '
             'total acquire time: ${totalAcquireTime.inMilliseconds}ms, '
             'reuse: $reuse');
 
@@ -201,15 +205,17 @@ class PoolImplementation<L> implements Pool<L> {
       // NOTE: It is important to update the _isInUse flag here, otherwise
       //       race conditions may create conflicts.
       oldc._isInUse = true;
-      print('[Pool] Reusing existing connection [Conn:${oldc._connection.connectionId}] '
+      print('${_timestamp()} [Pool] Reusing existing connection [Conn:${oldc._connection.connectionId}] '
           '(age: ${DateTime.now().difference(oldc._opened).inSeconds}s, '
           'elapsed in use: ${oldc._elapsedInUse.inSeconds}s)');
       return oldc;
     }
 
-    return await _connectLock
-        .withRequestTimeout(timeout: _settings.connectTimeout, (_) async {
-      print('[Pool] Creating new connection (current pool size: ${_connections.length}/$_maxConnectionCount)');
+    return await _connectLock.withRequestTimeout(
+      timeout: _settings.connectTimeout,
+      context: 'Pool connection creation',
+      (_) async {
+        print('${_timestamp()} [Pool] Creating new connection (current pool size: ${_connections.length}/$_maxConnectionCount)');
 
       while (_connections.length >= _maxConnectionCount) {
         final candidates =
@@ -219,7 +225,7 @@ class PoolImplementation<L> implements Pool<L> {
         }
         final selected = candidates.reduce(
             (a, b) => a._lastReturned.isBefore(b._lastReturned) ? a : b);
-        print('[Pool] Evicting old connection [Conn:${selected._connection.connectionId}] to make room '
+        print('${_timestamp()} [Pool] Evicting old connection [Conn:${selected._connection.connectionId}] to make room '
             '(age: ${DateTime.now().difference(selected._opened).inSeconds}s)');
         await selected._dispose();
       }
@@ -231,7 +237,7 @@ class PoolImplementation<L> implements Pool<L> {
       );
       final connectDuration = DateTime.now().difference(connectStart);
 
-      print('[Pool] New connection [Conn:${connection.connectionId}] established in ${connectDuration.inMilliseconds}ms');
+      print('${_timestamp()} [Pool] New connection [Conn:${connection.connectionId}] established in ${connectDuration.inMilliseconds}ms');
 
       final newc = _PoolConnection(
         this,
