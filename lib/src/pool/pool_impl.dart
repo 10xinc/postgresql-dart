@@ -130,8 +130,20 @@ class PoolImplementation<L> implements Pool<L> {
     ConnectionSettings? settings,
     L? locality,
   }) async {
+    final requestId = DateTime.now().microsecondsSinceEpoch;
+    final acquireStart = DateTime.now();
+    final semaphoreWaitSw = Stopwatch()..start();
+
+    print('[Pool:$requestId] Requesting connection from pool. '
+        'Current pool: ${_connections.length}/$_maxConnectionCount connections, '
+        '${_connections.where((c) => c._isInUse).length} in use');
+
     final resource =
         await _semaphore.requestWithTimeout(_settings.connectTimeout);
+    semaphoreWaitSw.stop();
+
+    print('[Pool:$requestId] Semaphore acquired in ${semaphoreWaitSw.elapsedMilliseconds}ms');
+
     _PoolConnection? connection;
     bool reuse = true;
     final sw = Stopwatch();
@@ -148,6 +160,8 @@ class PoolImplementation<L> implements Pool<L> {
         ResolvedConnectionSettings(settings, this._settings),
       );
 
+      print('[Pool:$requestId] Using [Conn:${connection._connection.connectionId}]');
+
       sw.start();
       try {
         return await fn(connection);
@@ -163,6 +177,11 @@ class PoolImplementation<L> implements Pool<L> {
       // well.
       if (connection != null) {
         connection._elapsedInUse += sw.elapsed;
+        final totalAcquireTime = DateTime.now().difference(acquireStart);
+        print('[Pool:$requestId] [Conn:${connection._connection.connectionId}] used for ${sw.elapsedMilliseconds}ms, '
+            'total acquire time: ${totalAcquireTime.inMilliseconds}ms, '
+            'reuse: $reuse');
+
         if (_closing || !reuse || !connection.isOpen) {
           await connection._dispose();
         } else {
@@ -182,11 +201,16 @@ class PoolImplementation<L> implements Pool<L> {
       // NOTE: It is important to update the _isInUse flag here, otherwise
       //       race conditions may create conflicts.
       oldc._isInUse = true;
+      print('[Pool] Reusing existing connection [Conn:${oldc._connection.connectionId}] '
+          '(age: ${DateTime.now().difference(oldc._opened).inSeconds}s, '
+          'elapsed in use: ${oldc._elapsedInUse.inSeconds}s)');
       return oldc;
     }
 
     return await _connectLock
         .withRequestTimeout(timeout: _settings.connectTimeout, (_) async {
+      print('[Pool] Creating new connection (current pool size: ${_connections.length}/$_maxConnectionCount)');
+
       while (_connections.length >= _maxConnectionCount) {
         final candidates =
             _connections.where((c) => c._isInUse == false).toList();
@@ -195,17 +219,25 @@ class PoolImplementation<L> implements Pool<L> {
         }
         final selected = candidates.reduce(
             (a, b) => a._lastReturned.isBefore(b._lastReturned) ? a : b);
+        print('[Pool] Evicting old connection [Conn:${selected._connection.connectionId}] to make room '
+            '(age: ${DateTime.now().difference(selected._opened).inSeconds}s)');
         await selected._dispose();
       }
+
+      final connectStart = DateTime.now();
+      final connection = await PgConnectionImplementation.connect(
+        endpoint,
+        connectionSettings: settings,
+      );
+      final connectDuration = DateTime.now().difference(connectStart);
+
+      print('[Pool] New connection [Conn:${connection.connectionId}] established in ${connectDuration.inMilliseconds}ms');
 
       final newc = _PoolConnection(
         this,
         endpoint,
         settings,
-        await PgConnectionImplementation.connect(
-          endpoint,
-          connectionSettings: settings,
-        ),
+        connection,
       );
       newc._isInUse = true;
       // NOTE: It is important to update _connections list after the isInUse
